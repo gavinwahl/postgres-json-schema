@@ -1,6 +1,7 @@
-sudo: false
 install:
   - pip install psycopg2
+  - git submodule init
+  - git submodule update
 before_script:
   psql -c 'CREATE DATABASE json_test;' -U postgres
 env:
@@ -8,6 +9,6 @@ env:
 services:
   - postgresql
 addons:
-  postgresql: "9.5"
+  postgresql: "9.4"
 script: python test.py
 language: python

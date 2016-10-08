@@ -13,8 +13,8 @@ cur = conn.cursor()
 with open('jsonschema.sql') as f:
     cur.execute(f.read())
 
-with open('tests.sql') as f:
-    cur.execute(f.read())
+#with open('tests.sql') as f:
+    #cur.execute(f.read())
 
 EXCLUDE = {'optional', 'refRemote.json', 'definitions.json'}
 

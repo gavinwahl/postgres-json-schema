@@ -161,7 +161,7 @@ BEGIN
       SELECT regexp_replace(regexp_replace(path_part, '~1', '/'), '~0', '~')
       FROM UNNEST(regexp_split_to_array(schema->>'$ref', '/')) path_part
     );
-    ASSERT path[1] = '#', 'only refs anchored at the root are supported';
+    -- ASSERT path[1] = '#', 'only refs anchored at the root are supported';
     IF NOT validate_json_schema(root_schema #> path[2:array_length(path, 1)], data, root_schema) THEN
       RETURN false;
     END IF;
