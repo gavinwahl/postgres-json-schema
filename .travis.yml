@@ -1,0 +1,13 @@
+sudo: false
+install:
+  - pip install psycopg2
+before_script:
+  psql -c 'CREATE DATABASE json_test;' -U postgres
+env:
+  - DATABASE_URL=postgres:///json_test
+services:
+  - postgresql
+addons:
+  postgresql: "9.5"
+script: python test.py
+language: python
