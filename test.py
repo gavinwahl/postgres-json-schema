@@ -10,12 +10,6 @@ conn.set_session(autocommit=True)
 
 cur = conn.cursor()
 
-with open('jsonschema.sql') as f:
-    cur.execute(f.read())
-
-#with open('tests.sql') as f:
-    #cur.execute(f.read())
-
 EXCLUDE = {'optional', 'refRemote.json', 'definitions.json'}
 
 os.chdir('JSON-Schema-Test-Suite/tests/draft4')

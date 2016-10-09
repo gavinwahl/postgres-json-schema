@@ -1,14 +1,17 @@
+sudo: required
 install:
   - pip install psycopg2
-  - git submodule init
-  - git submodule update
-before_script:
-  psql -c 'CREATE DATABASE json_test;' -U postgres
+  - psql -c 'CREATE DATABASE json_test;' -U postgres
+  - sudo make install
+  - psql json_test -c 'CREATE EXTENSION "postgres-json-schema";' -U postgres
 env:
   - DATABASE_URL=postgres:///json_test
 services:
   - postgresql
 addons:
   postgresql: "9.4"
+  apt:
+    packages:
+      - postgresql-server-dev-9.4
 script: python test.py
 language: python

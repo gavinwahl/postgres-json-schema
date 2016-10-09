@@ -14,7 +14,7 @@ BEGIN
   END IF;
   RETURN true;
 END;
-$f$ LANGUAGE 'plpgsql';
+$f$ LANGUAGE 'plpgsql' IMMUTABLE;
 
 
 CREATE OR REPLACE FUNCTION validate_json_schema(schema jsonb, data jsonb, root_schema jsonb DEFAULT NULL) RETURNS boolean AS $f$
@@ -256,4 +256,4 @@ BEGIN
 
   RETURN true;
 END;
-$f$ LANGUAGE 'plpgsql';
+$f$ LANGUAGE 'plpgsql' IMMUTABLE;
