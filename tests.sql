@@ -7,6 +7,7 @@ BEGIN
   ASSERT validate_json_schema('{"type": "number"}', '123');
   ASSERT validate_json_schema('{"type": "integer"}', '123');
   ASSERT NOT validate_json_schema('{"type": "integer"}', '123.1');
+  ASSERT validate_json_schema('{"type": "integer"}', '-103948');
   ASSERT NOT validate_json_schema('{"type": "number"}', '"a"');
   ASSERT validate_json_schema('{"type": "string"}', '"a"');
   ASSERT NOT validate_json_schema('{"type": "string"}', '{}');
@@ -54,6 +55,7 @@ BEGIN
 
   ASSERT validate_json_schema('{"enum": [1,2,3]}', '1');
   ASSERT NOT validate_json_schema('{"enum": [1,2,3]}', '4');
+
 
   RETURN true;
 END;

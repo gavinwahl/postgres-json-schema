@@ -4,7 +4,7 @@ BEGIN
     IF jsonb_typeof(data) != 'number' THEN
       RETURN false;
     END IF;
-    IF NOT data::text SIMILAR TO '[0-9]+' THEN
+    IF trunc(data::text::numeric) != data::text::numeric THEN
       RETURN false;
     END IF;
   ELSE
