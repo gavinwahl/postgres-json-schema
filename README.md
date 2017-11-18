@@ -1,5 +1,7 @@
 # postgres-json-schema
 
+[![Build Status](https://travis-ci.org/gavinwahl/postgres-json-schema.svg?branch=master)](https://travis-ci.org/gavinwahl/postgres-json-schema)
+
 postgres-json-schema allows validation of [JSON
 schemas](http://json-schema.org/) in PostgreSQL. It is implemented as a
 PL/pgSQL function and you can use it as a check constraint to validate the
