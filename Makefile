@@ -1,5 +1,5 @@
 EXTENSION = postgres-json-schema
-DATA = postgres-json-schema--0.1.0.sql
+DATA = postgres-json-schema--0.1.1.sql
 
 # postgres build stuff
 PG_CONFIG = pg_config

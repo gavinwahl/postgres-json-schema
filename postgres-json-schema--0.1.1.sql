@@ -36,14 +36,14 @@ BEGIN
     ELSE
       types = ARRAY[schema->>'type'];
     END IF;
-    IF (SELECT NOT bool_or(_validate_json_schema_type(type, data)) FROM unnest(types) type) THEN
+    IF (SELECT NOT bool_or(@extschema@._validate_json_schema_type(type, data)) FROM unnest(types) type) THEN
       RETURN false;
     END IF;
   END IF;
 
   IF schema ? 'properties' THEN
     FOR prop IN SELECT jsonb_object_keys(schema->'properties') LOOP
-      IF data ? prop AND NOT validate_json_schema(schema->'properties'->prop, data->prop, root_schema) THEN
+      IF data ? prop AND NOT @extschema@.validate_json_schema(schema->'properties'->prop, data->prop, root_schema) THEN
         RETURN false;
       END IF;
     END LOOP;
@@ -59,13 +59,13 @@ BEGIN
   IF schema ? 'items' AND jsonb_typeof(data) = 'array' THEN
     IF jsonb_typeof(schema->'items') = 'object' THEN
       FOR item IN SELECT jsonb_array_elements(data) LOOP
-        IF NOT validate_json_schema(schema->'items', item, root_schema) THEN
+        IF NOT @extschema@.validate_json_schema(schema->'items', item, root_schema) THEN
           RETURN false;
         END IF;
       END LOOP;
     ELSE
       IF NOT (
-        SELECT bool_and(i > jsonb_array_length(schema->'items') OR validate_json_schema(schema->'items'->(i::int - 1), elem, root_schema))
+        SELECT bool_and(i > jsonb_array_length(schema->'items') OR @extschema@.validate_json_schema(schema->'items'->(i::int - 1), elem, root_schema))
         FROM jsonb_array_elements(data) WITH ORDINALITY AS t(elem, i)
       ) THEN
         RETURN false;
@@ -81,7 +81,7 @@ BEGIN
 
   IF jsonb_typeof(schema->'additionalItems') = 'object' THEN
     IF NOT (
-        SELECT bool_and(validate_json_schema(schema->'additionalItems', elem, root_schema))
+        SELECT bool_and(@extschema@.validate_json_schema(schema->'additionalItems', elem, root_schema))
         FROM jsonb_array_elements(data) WITH ORDINALITY AS t(elem, i)
         WHERE i > jsonb_array_length(schema->'items')
       ) THEN
@@ -114,19 +114,19 @@ BEGIN
   END IF;
 
   IF schema ? 'anyOf' THEN
-    IF NOT (SELECT bool_or(validate_json_schema(sub_schema, data, root_schema)) FROM jsonb_array_elements(schema->'anyOf') sub_schema) THEN
+    IF NOT (SELECT bool_or(@extschema@.validate_json_schema(sub_schema, data, root_schema)) FROM jsonb_array_elements(schema->'anyOf') sub_schema) THEN
       RETURN false;
     END IF;
   END IF;
 
   IF schema ? 'allOf' THEN
-    IF NOT (SELECT bool_and(validate_json_schema(sub_schema, data, root_schema)) FROM jsonb_array_elements(schema->'allOf') sub_schema) THEN
+    IF NOT (SELECT bool_and(@extschema@.validate_json_schema(sub_schema, data, root_schema)) FROM jsonb_array_elements(schema->'allOf') sub_schema) THEN
       RETURN false;
     END IF;
   END IF;
 
   IF schema ? 'oneOf' THEN
-    IF 1 != (SELECT COUNT(*) FROM jsonb_array_elements(schema->'oneOf') sub_schema WHERE validate_json_schema(sub_schema, data, root_schema)) THEN
+    IF 1 != (SELECT COUNT(*) FROM jsonb_array_elements(schema->'oneOf') sub_schema WHERE @extschema@.validate_json_schema(sub_schema, data, root_schema)) THEN
       RETURN false;
     END IF;
   END IF;
@@ -149,7 +149,7 @@ BEGIN
         RETURN false;
       END IF;
     ELSEIF NOT (
-      SELECT bool_and(validate_json_schema(schema->'additionalProperties', data->key, root_schema))
+      SELECT bool_and(@extschema@.validate_json_schema(schema->'additionalProperties', data->key, root_schema))
       FROM unnest(props) key
     ) THEN
       RETURN false;
@@ -162,7 +162,7 @@ BEGIN
       FROM UNNEST(regexp_split_to_array(schema->>'$ref', '/')) path_part
     );
     -- ASSERT path[1] = '#', 'only refs anchored at the root are supported';
-    IF NOT validate_json_schema(root_schema #> path[2:array_length(path, 1)], data, root_schema) THEN
+    IF NOT @extschema@.validate_json_schema(root_schema #> path[2:array_length(path, 1)], data, root_schema) THEN
       RETURN false;
     END IF;
   END IF;
@@ -186,7 +186,7 @@ BEGIN
   END IF;
 
   IF schema ? 'not' THEN
-    IF validate_json_schema(schema->'not', data, root_schema) THEN
+    IF @extschema@.validate_json_schema(schema->'not', data, root_schema) THEN
       RETURN false;
     END IF;
   END IF;
@@ -223,7 +223,7 @@ BEGIN
             RETURN false;
           END IF;
         ELSE
-          IF NOT validate_json_schema(schema->'dependencies'->prop, data, root_schema) THEN
+          IF NOT @extschema@.validate_json_schema(schema->'dependencies'->prop, data, root_schema) THEN
             RETURN false;
           END IF;
         END IF;
@@ -241,7 +241,7 @@ BEGIN
     FOR prop IN SELECT jsonb_object_keys(data) LOOP
       FOR pattern IN SELECT jsonb_object_keys(schema->'patternProperties') LOOP
         RAISE NOTICE 'prop %s, pattern %, schema %', prop, pattern, schema->'patternProperties'->pattern;
-        IF prop ~ pattern AND NOT validate_json_schema(schema->'patternProperties'->pattern, data->prop, root_schema) THEN
+        IF prop ~ pattern AND NOT @extschema@.validate_json_schema(schema->'patternProperties'->pattern, data->prop, root_schema) THEN
           RETURN false;
         END IF;
       END LOOP;
