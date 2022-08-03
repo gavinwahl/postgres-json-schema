@@ -333,9 +333,7 @@ BEGIN
         path := @extschema@.json_schema_resolve_ref(schema->>'$ref', NULL, NULL, NULL);
     END IF;
 
-    RAISE WARNING 'Checking path of $ref %', path;
     IF path IS NULL THEN
-        RAISE WARNING '$ref % does not exist: %', schema->'$ref', path;
         RETURN ARRAY [(schema_path, format('$ref %s does not exist', schema->>'$ref'))];
     END IF;
 
@@ -442,7 +440,6 @@ BEGIN
   IF schema ? 'patternProperties' AND jsonb_typeof(data) = 'object' THEN
     FOR prop IN SELECT jsonb_object_keys(data) LOOP
       FOR pattern IN SELECT jsonb_object_keys(schema->'patternProperties') LOOP
-        RAISE NOTICE 'prop %s, pattern %, schema %', prop, pattern, schema->'patternProperties'->pattern;
         IF prop ~ pattern AND NOT @extschema@.get_json_schema_validations(schema->'patternProperties'->pattern, data->prop, root_schema, schema_path, string_as_number) THEN
           RETURN ARRAY [(schema_path || prop, format('field does not match pattern %s', pattern))];
         END IF;
@@ -554,7 +551,6 @@ CREATE OR REPLACE FUNCTION json_schema_resolve_refs(
     BEGIN
         IF resolve_refs THEN
             IF schema ? '$ref' THEN
-                RAISE NOTICE 'Resolving ref with [ref: %, base_uri: %, base_path: %]', schema->>'$ref', base_uri, base_path;
                 resolved_path := (@extschema@.json_schema_resolve_ref(schema->>'$ref', base_uri, base_path, resolved_ids_mapping));
                 schema := jsonb_set(schema, ARRAY['$_resolvedRef'], to_jsonb(resolved_path));
             END IF;
@@ -586,7 +582,6 @@ CREATE OR REPLACE FUNCTION json_schema_resolve_refs(
 
         ELSEIF jsonb_typeof(schema) = 'array' THEN
             FOR idx IN 0..jsonb_array_length(schema) - 1 LOOP
-                RAISE NOTICE 'ARRAY ITEM %', idx;
                 SELECT t.schema INTO sub_schema
                    FROM @extschema@.json_schema_resolve_refs(schema->idx,  base_uri, base_path, resolved_ids_mapping, resolve_refs) t;
                 schema := jsonb_set(schema, ARRAY [idx::text], sub_schema);
@@ -644,11 +639,9 @@ CREATE OR REPLACE FUNCTION json_schema_resolve_ref(
         IF v_uri != '' THEN
             v_uri := (@extschema@.json_schema_resolve_uri(v_uri, base_uri, base_path)).resolved_uri;
             IF resolved_ids_mapping IS NULL THEN
-                RAISE WARNING 'Cannot resolve URI %: resolved_ids_mapping is NULL', v_uri;
                 RETURN NULL;
             END IF;
             IF NOT resolved_ids_mapping ? v_uri THEN
-                RAISE WARNING 'URI %: does not exist in resolved_ids_mapping', v_uri;
                 RETURN NULL;
             END IF;
             RETURN ARRAY(SELECT jsonb_array_elements_text(resolved_ids_mapping->v_uri)) || v_parts;
@@ -656,7 +649,6 @@ CREATE OR REPLACE FUNCTION json_schema_resolve_ref(
             RETURN ARRAY[]::text[];
         ELSEIF resolved_ids_mapping ? (base_uri || base_path) THEN
             v_path := resolved_ids_mapping->(base_uri || base_path);
-            RAISE NOTICE 'base_uri || base_path: % | %', base_uri || base_path, v_parts;
             RETURN ARRAY(SELECT jsonb_array_elements_text(v_path)) || v_parts;
         ELSEIF (ref ~ '^#.[^/]+$') AND resolved_ids_mapping ? ref THEN
             RETURN ARRAY(SELECT jsonb_array_elements_text(resolved_ids_mapping->ref));
