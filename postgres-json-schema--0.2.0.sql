@@ -4,21 +4,21 @@ CREATE TYPE json_schema_validation_result AS (
 );
 
 
-CREATE OR REPLACE FUNCTION json_schema_validation_result_as_bool (json_schema_validation_result) RETURNS bool AS $$
+CREATE OR REPLACE FUNCTION json_schema_validation_result_as_bool (@extschema@.json_schema_validation_result) RETURNS bool AS $$
     SELECT ($1).error IS NULL;
 $$ LANGUAGE SQL IMMUTABLE;
 
-CREATE OR REPLACE FUNCTION json_schema_validation_result_array_as_bool (json_schema_validation_result[]) RETURNS bool AS $$
-    SELECT $1 IS NULL OR true = ALL ($1);
+CREATE OR REPLACE FUNCTION json_schema_validation_result_array_as_bool (@extschema@.json_schema_validation_result[]) RETURNS bool AS $$
+    SELECT $1 IS NULL OR true = ALL ($1::bool[]);
 $$ LANGUAGE SQL IMMUTABLE;
 
 CREATE CAST ( json_schema_validation_result AS bool )
     WITH FUNCTION @extschema@.json_schema_validation_result_as_bool(json_schema_validation_result)
-    AS IMPLICIT;
+    AS ASSIGNMENT;
 
 CREATE CAST ( json_schema_validation_result[] AS bool )
     WITH FUNCTION @extschema@.json_schema_validation_result_array_as_bool(json_schema_validation_result[])
-    AS IMPLICIT;
+    AS ASSIGNMENT;
 
 
 
@@ -93,12 +93,24 @@ CREATE OR REPLACE FUNCTION validate_json_schema(schema jsonb, data jsonb, root_s
     SELECT @extschema@.get_json_schema_validations(schema, data, root_schema, ARRAY []::text[], string_as_number)::bool;
 $f$ LANGUAGE SQL IMMUTABLE ;
 
-CREATE OR REPLACE FUNCTION json_schema_check_constraint(schema jsonb, data jsonb, string_as_number bool default true) RETURNS bool AS $$
-    DECLARE result json_schema_validation_result[];
+CREATE OR REPLACE FUNCTION json_schema_check_constraint(
+    schema jsonb,
+    data jsonb,
+    string_as_number bool default false,
+    table_name text default '',
+    column_name text default ''
+) RETURNS bool AS $$
+    DECLARE
+        result json_schema_validation_result[];
     BEGIN
         result := @extschema@.get_json_schema_validations(schema, data, schema, '{}'::text[], string_as_number := string_as_number);
         IF (NOT result) THEN
-            RAISE check_violation USING MESSAGE = 'json_schema_validation_failed', DETAIL = result;
+            RAISE check_violation USING
+                MESSAGE = 'json_schema_validation_failed',
+                DETAIL = to_jsonb(result),
+                -- HINT = v_value,
+                TABLE = table_name,
+                COLUMN = column_name;
         END IF;
         RETURN true;
     END;
@@ -109,7 +121,7 @@ $$ LANGUAGE plpgsql IMMUTABLE ;
 CREATE OR REPLACE FUNCTION _validate_json_multiple_schemas(
     schemas_array jsonb, data jsonb, root_schema jsonb, schema_path text[], string_as_number bool,
     OUT validation_booleans bool[],
-    OUT all_errors json_schema_validation_result[]
+    OUT all_errors @extschema@.json_schema_validation_result[]
 ) AS $f$
     WITH schema_validations AS (
         SELECT q FROM jsonb_array_elements(schemas_array) sub_schema,
@@ -122,7 +134,7 @@ $f$ LANGUAGE SQL IMMUTABLE ;
 
 
 CREATE OR REPLACE FUNCTION get_json_schema_validations(schema jsonb, data jsonb, root_schema jsonb, schema_path text[], string_as_number bool)
-RETURNS json_schema_validation_result[] AS $f$
+RETURNS @extschema@.json_schema_validation_result[] AS $f$
 DECLARE
   prop text;
   item jsonb;
@@ -133,7 +145,7 @@ DECLARE
   additionalItems jsonb;
   pattern text;
   props text[];
-  result json_schema_validation_result[];
+  result @extschema@.json_schema_validation_result[];
   q_result record;
 BEGIN
   IF root_schema IS NULL THEN
@@ -160,7 +172,7 @@ BEGIN
     ELSE
       types = ARRAY[schema->>'type'];
     END IF;
-    IF (SELECT NOT bool_or(@extschema@._validate_json_schema_type(type, data)) FROM unnest(types) type) THEN
+    IF (SELECT NOT bool_or(@extschema@._validate_json_schema_type(type, data, string_as_number)) FROM unnest(types) type) THEN
       RETURN ARRAY [(schema_path, format('%s is not a valid type: %s', jsonb_typeof(data), types))];
     END IF;
   END IF;
@@ -179,7 +191,7 @@ BEGIN
   IF schema ? 'required' AND jsonb_typeof(data) = 'object' THEN
     IF NOT ARRAY(SELECT jsonb_object_keys(data)) @>
            ARRAY(SELECT jsonb_array_elements_text(schema->'required')) THEN
-      RETURN ARRAY [(path, format('%s is missing required properties: %s', schema->>'type', ARRAY(
+      RETURN ARRAY [(schema_path, format('%s is missing required properties: %s', schema->>'type', ARRAY(
           SELECT jsonb_array_elements_text(schema->'required')
           EXCEPT
           SELECT jsonb_object_keys(data)
@@ -215,7 +227,7 @@ BEGIN
       IF prefixItems IS NOT NULL THEN
         SELECT array_agg(q) INTO result
                             FROM jsonb_array_elements(prefixItems) WITH ORDINALITY AS t(sub_schema, i),
-                                 @extschema@.get_json_schema_validations(sub_schema, data->(i::int - 1), root_schema, schema_path || i::text, string_as_number) q1, unnest(q1) q
+                                 @extschema@.get_json_schema_validations(sub_schema, data->(i::int - 1), root_schema, schema_path || (i - 1)::text, string_as_number) q1, unnest(q1) q
                             WHERE i <= jsonb_array_length(data);
         IF NOT result THEN
           RETURN result;
@@ -225,14 +237,14 @@ BEGIN
 
       IF jsonb_typeof(additionalItems) = 'boolean' and NOT (additionalItems)::text::boolean THEN
         IF jsonb_array_length(data) > COALESCE(jsonb_array_length(prefixItems), 0) THEN
-          RETURN ARRAY [(path, format('field only accepts %s items', COALESCE(jsonb_array_length(prefixItems), 0)))];
+          RETURN ARRAY [(schema_path, format('field only accepts %s items', COALESCE(jsonb_array_length(prefixItems), 0)))];
         END IF;
       END IF;
 
       IF jsonb_typeof(additionalItems) = 'object' THEN
         SELECT array_agg(q) INTO result
         FROM jsonb_array_elements(data) WITH ORDINALITY AS t(elem, i),
-             @extschema@.get_json_schema_validations(additionalItems, elem, root_schema, schema_path || i::text, string_as_number) AS  q1, unnest(q1) q
+             @extschema@.get_json_schema_validations(additionalItems, elem, root_schema, schema_path || (i - 1)::text, string_as_number) AS  q1, unnest(q1) q
         WHERE i > coalesce(jsonb_array_length(prefixItems), 0) AND NOT q LIMIT 1;
 
         IF NOT result THEN
@@ -244,24 +256,24 @@ BEGIN
 
   IF schema ? 'minimum' AND jsonb_typeof(data) = 'number' THEN
     IF data::text::numeric < (schema->>'minimum')::numeric THEN
-      RETURN ARRAY [(path, format('value must be >= %s', (schema->>'minimum')))];
+      RETURN ARRAY [(schema_path, format('value must be >= %s', (schema->>'minimum')))];
     END IF;
   END IF;
 
   IF schema ? 'maximum' AND jsonb_typeof(data) = 'number' THEN
     IF data::text::numeric > (schema->>'maximum')::numeric THEN
-      RETURN ARRAY [(path, format('value must be <= %s', (schema->>'maximum')))];
+      RETURN ARRAY [(schema_path, format('value must be <= %s', (schema->>'maximum')))];
     END IF;
   END IF;
 
   IF schema ? 'exclusiveMinimum' AND jsonb_typeof(data) = 'number' THEN
       IF jsonb_typeof(schema->'exclusiveMinimum') = 'number' THEN
         IF data::text::numeric <= (schema->>'exclusiveMinimum')::numeric THEN
-          RETURN ARRAY [(path, format('value must be > %s', (schema->>'exclusiveMinimum')))];
+          RETURN ARRAY [(schema_path, format('value must be > %s', (schema->>'exclusiveMinimum')))];
         END IF;
       ELSEIF COALESCE((schema->'exclusiveMinimum')::text::bool, FALSE) THEN
         IF data::text::numeric = (schema->>'minimum')::numeric THEN
-          RETURN ARRAY [(path, format('value must be > %s', (schema->>'minimum')))];
+          RETURN ARRAY [(schema_path, format('value must be > %s', (schema->>'minimum')))];
         END IF;
       END IF;
   END IF;
@@ -269,11 +281,11 @@ BEGIN
   IF schema ? 'exclusiveMaximum' AND jsonb_typeof(data) = 'number' THEN
       IF jsonb_typeof(schema->'exclusiveMaximum') = 'number' THEN
         IF data::text::numeric >= (schema->>'exclusiveMaximum')::numeric THEN
-          RETURN ARRAY [(path, format('value must be < %s', (schema->>'exclusiveMinimum')))];
+          RETURN ARRAY [(schema_path, format('value must be < %s', (schema->>'exclusiveMinimum')))];
         END IF;
       ELSEIF COALESCE((schema->'exclusiveMaximum')::text::bool, FALSE) THEN
         IF data::text::numeric = (schema->>'maximum')::numeric THEN
-          RETURN ARRAY [(path, format('value must be < %s', (schema->>'maximum')))];
+          RETURN ARRAY [(schema_path, format('value must be < %s', (schema->>'maximum')))];
         END IF;
       END IF;
   END IF;
@@ -281,14 +293,14 @@ BEGIN
   IF schema ? 'anyOf' THEN
     q_result := @extschema@._validate_json_multiple_schemas(schema->'anyOf', data, root_schema, schema_path, string_as_number);
     IF NOT (SELECT true = any (q_result.validation_booleans)) THEN
-      RETURN q_result.all_errors || (schema_path, 'does not match any of the required schemas')::json_schema_validation_result;
+      RETURN q_result.all_errors || (schema_path, 'does not match any of the required schemas')::@extschema@.json_schema_validation_result;
     END IF;
   END IF;
 
   IF schema ? 'allOf' THEN
     q_result := @extschema@._validate_json_multiple_schemas(schema->'allOf', data, root_schema, schema_path, string_as_number);
     IF NOT (SELECT true = all(q_result.validation_booleans)) THEN
-      RETURN q_result.all_errors || (schema_path, 'does not match all of the required schemas')::json_schema_validation_result;
+      RETURN q_result.all_errors || (schema_path, 'does not match all of the required schemas')::@extschema@.json_schema_validation_result;
     END IF;
   END IF;
 
@@ -296,7 +308,7 @@ BEGIN
     q_result := @extschema@._validate_json_multiple_schemas(schema->'oneOf', data, root_schema, schema_path, string_as_number);
     SELECT count(a::bool) INTO idx FROM unnest(q_result.validation_booleans) a WHERE a = true;
     IF (idx != 1) THEN
-      RETURN ARRAY [(schema_path, format('should match exactly one of the schemas, but matches %s', idx))::json_schema_validation_result];
+      RETURN ARRAY [(schema_path, format('should match exactly one of the schemas, but matches %s', idx))::@extschema@.json_schema_validation_result];
     END IF;
   END IF;
 
@@ -319,7 +331,7 @@ BEGIN
       END IF;
     ELSE
       SELECT array_agg(q) INTO result FROM unnest(props) key, @extschema@.get_json_schema_validations(schema->'additionalProperties', data->key, root_schema, schema_path || key, string_as_number)  q1, unnest(q1) q;
-      IF NOT (true = all(result)) THEN
+      IF NOT (true = all(result::bool[])) THEN
         RETURN result;
       END IF;
     END IF;
@@ -338,7 +350,7 @@ BEGIN
     END IF;
 
     result := @extschema@.get_json_schema_validations(root_schema #> path, data, root_schema, schema_path, string_as_number);
-    IF NOT (true = all(result)) THEN
+    IF NOT (true = all(result::bool[])) THEN
       RETURN result;
     END IF;
   END IF;
@@ -402,14 +414,14 @@ BEGIN
   IF schema ? 'maxItems' AND jsonb_typeof(data) = 'array' THEN
     SELECT count(*) INTO idx FROM jsonb_array_elements(data);
     IF idx > (schema->>'maxItems')::numeric THEN
-      RETURN ARRAY [(schema_path, format('field items count %s exceeds maxItems of %s', idx, schema->'maxItems'))];
+      RETURN ARRAY [(schema_path, format('items count of %s exceeds maxItems of %s', idx, schema->'maxItems'))];
     END IF;
   END IF;
 
   IF schema ? 'minItems' AND jsonb_typeof(data) = 'array' THEN
     SELECT count(*) INTO idx FROM jsonb_array_elements(data);
     IF idx < (schema->>'minItems')::numeric THEN
-      RETURN ARRAY [(schema_path, format('field items count %s is less than minItems of %s', idx, schema->'minItems'))];
+      RETURN ARRAY [(schema_path, format('items count of %s is less than minItems of %s', idx, schema->'minItems'))];
     END IF;
   END IF;
 
@@ -477,7 +489,7 @@ BEGIN
     END IF;
   END IF;
 
-  RETURN '{}'::json_schema_validation_result[];
+  RETURN '{}'::@extschema@.json_schema_validation_result[];
 END;
 $f$ LANGUAGE 'plpgsql' VOLATILE ;
 
@@ -691,7 +703,7 @@ CREATE OR REPLACE FUNCTION json_schema_resolve_ids_to_paths (
         ELSEIF jsonb_typeof(schema) = 'array' THEN
             RETURN QUERY SELECT q.*
                          FROM jsonb_array_elements(schema) WITH ORDINALITY t(elem, idx),
-                              @extschema@.json_schema_resolve_ids_to_paths(elem, path || (idx -1)::text, base_uri, base_path) q;
+                              @extschema@.json_schema_resolve_ids_to_paths(elem, path || (idx - 1)::text, base_uri, base_path) q;
 
         END IF;
         resolved_path := path;

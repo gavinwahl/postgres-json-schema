@@ -129,3 +129,194 @@ BEGIN
     ASSERT (SELECT '{definitions,A,definitions,B,part1,nested}'::text[] = json_schema_resolve_ref('http://localhost:1234/nested.json#foo/part1/nested', NULL, NULL, '{"http://localhost:1234/root": [], "http://localhost:1234/nested.json": ["definitions", "A"], "http://localhost:1234/nested.json#foo": ["definitions", "A", "definitions", "B"]}'));
 END;
 $f$;
+
+
+CREATE OR REPLACE FUNCTION test_raises_exception(
+    text,
+    expected jsonb,
+    OUT result bool, OUT msg text
+) AS $f$
+    DECLARE
+        RETURNED_SQLSTATE text;
+        COLUMN_NAME text;
+        CONSTRAINT_NAME text;
+        PG_DATATYPE_NAME text;
+        MESSAGE_TEXT text;
+        TABLE_NAME text;
+        SCHEMA_NAME text;
+        PG_EXCEPTION_DETAIL text;
+        PG_EXCEPTION_HINT text;
+        PG_EXCEPTION_CONTEXT text;
+        v_vars jsonb;
+        v_key text;
+        v_value text;
+    BEGIN
+        result := false;
+        msg := 'No exception raised';
+        execute ( $1 );
+    EXCEPTION
+        WHEN others THEN
+            GET STACKED DIAGNOSTICS
+                RETURNED_SQLSTATE := RETURNED_SQLSTATE,
+                COLUMN_NAME := COLUMN_NAME,
+                CONSTRAINT_NAME := CONSTRAINT_NAME,
+                PG_DATATYPE_NAME := PG_DATATYPE_NAME,
+                MESSAGE_TEXT := MESSAGE_TEXT,
+                TABLE_NAME := TABLE_NAME,
+                SCHEMA_NAME := SCHEMA_NAME,
+                PG_EXCEPTION_DETAIL := PG_EXCEPTION_DETAIL,
+                PG_EXCEPTION_HINT := PG_EXCEPTION_HINT,
+                PG_EXCEPTION_CONTEXT := PG_EXCEPTION_CONTEXT;
+
+            v_vars := jsonb_build_object(
+                'RETURNED_SQLSTATE', RETURNED_SQLSTATE,
+                'COLUMN_NAME', COLUMN_NAME,
+                'CONSTRAINT_NAME', CONSTRAINT_NAME,
+                'PG_DATATYPE_NAME', PG_DATATYPE_NAME,
+                'MESSAGE_TEXT', MESSAGE_TEXT,
+                'TABLE_NAME', TABLE_NAME,
+                'SCHEMA_NAME', SCHEMA_NAME,
+                'PG_EXCEPTION_DETAIL', PG_EXCEPTION_DETAIL,
+                'PG_EXCEPTION_HINT', PG_EXCEPTION_HINT,
+                'PG_EXCEPTION_CONTEXT', PG_EXCEPTION_CONTEXT
+            );
+            IF expected IS NOT NULL THEN
+                FOR v_key, v_value IN SELECT k, coalesce(expected->>k, expected->>lower(k)) FROM jsonb_object_keys(v_vars) k LOOP
+
+                    IF v_value IS NOT NULL AND v_vars->>v_key NOT ILIKE v_value THEN
+                        result := false;
+                        msg := format('%s: %s != Expected %s', v_key, v_vars->>v_key, v_value);
+                        RETURN;
+                    END IF;
+                END LOOP;
+            END IF;
+
+            result := true;
+            msg := MESSAGE_TEXT;
+    END;
+
+$f$ LANGUAGE plpgsql VOLATILE ;
+
+
+
+DO $f$
+BEGIN
+    ASSERT (SELECT true = null::json_schema_validation_result::bool);
+    ASSERT (SELECT true = (null)::json_schema_validation_result::bool);
+    ASSERT (SELECT true = (null, null)::json_schema_validation_result::bool);
+    ASSERT (SELECT true = ('{path,to,field}', null)::json_schema_validation_result::bool);
+
+    ASSERT ( SELECT result FROM test_raises_exception( $$ SELECT true = null::json_schema_validation_result $$, '{"message_text":  "operator does not exist: boolean = json_schema_validation_result"}' ) );
+    ASSERT ( SELECT result FROM test_raises_exception( $$ SELECT true = ARRAY[(null)::json_schema_validation_result] $$, '{"message_text":  "operator does not exist: boolean = json_schema_validation_result[]"}' ) );
+
+    ASSERT (SELECT NOT (NOT NULL::json_schema_validation_result));
+    ASSERT (SELECT NOT (NOT NULL::json_schema_validation_result));
+    ASSERT (SELECT NOT ('{path,to,field}', 'FAILED')::json_schema_validation_result);
+    ASSERT (SELECT NOT ARRAY[('{path,to,field}', 'FAILED')]::json_schema_validation_result[]);
+    ASSERT (SELECT NOT ARRAY[('{path,to,field}', 'FAILED')]::json_schema_validation_result[]);
+    ASSERT (SELECT NOT ARRAY[NULL, ('{path,to,field}', 'FAILED')]::json_schema_validation_result[]);
+    ASSERT (SELECT ARRAY[NULL]::json_schema_validation_result[]);
+    ASSERT (SELECT ARRAY[('{path,to,field}', null)]::json_schema_validation_result[]::bool);
+    ASSERT (SELECT NULL::json_schema_validation_result[]::bool);
+
+END;
+$f$;
+
+
+DO $f$
+DECLARE
+    v_result RECORD;
+    v_schema1 jsonb := $$ {
+            "definitions": {
+                "reffed": {
+                    "type": "array"
+                }
+            },
+            "properties": {
+                "foo": {
+                    "$ref": "#/definitions/reffed",
+                    "maxItems": 2
+                }
+            }
+        } $$;
+
+    v_schema2 jsonb := $${
+            "definitions": {
+                "reffed": {
+                    "type": "array"
+                }
+            },
+            "properties": {
+                "foo": {
+                    "type": "array",
+                    "maxItems": 2,
+                    "items": {
+                      "type": "number"
+                    }
+                }
+            }
+        } $$;
+BEGIN
+
+    SELECT INTO v_result *, ARRAY[('{foo}','string is not a valid type: {array}')]::json_schema_validation_result[] = a AS valid FROM get_json_schema_validations(v_schema1, $$ { "foo": "string" } $$) a;
+        ASSERT v_result.valid, v_result;
+    SELECT INTO v_result *, ARRAY[('{foo}','items count of 3 exceeds maxItems of 2')]::json_schema_validation_result[] = a AS valid FROM get_json_schema_validations(v_schema1, $$ { "foo": ["string", "23", 1] } $$) a;
+        ASSERT v_result.valid, v_result;
+    SELECT INTO v_result *, ARRAY[]::json_schema_validation_result[] = a AS valid FROM get_json_schema_validations(v_schema1, $$ { "foo": ["string", 1] } $$) a;
+        ASSERT v_result.valid, v_result;
+    SELECT INTO v_result *, ARRAY[('{1}','string is not a valid type: {integer}')]::json_schema_validation_result[] = a AS valid FROM get_json_schema_validations('{"items": [{"type": "integer"}, {"$ref": "#/items/0"}]}', '[1, "foo"]') a;
+        ASSERT v_result.valid, v_result;
+    SELECT INTO v_result *, ARRAY[('{foo,0}','string is not a valid type: {number}')]::json_schema_validation_result[] = a AS valid FROM get_json_schema_validations(v_schema2, $$ { "foo": ["hello"] } $$) a;
+        ASSERT v_result.valid, v_result;
+    -- test string is not valid even if it is all digits when string_as_number is false
+    SELECT INTO v_result *, ARRAY[('{foo,0}','string is not a valid type: {number}')]::json_schema_validation_result[] = a AS valid FROM get_json_schema_validations(v_schema2, $$ { "foo": ["0"] } $$) a;
+        ASSERT v_result.valid, v_result;
+    -- test quoted number is valid when string_as_number is true with a literal string
+    SELECT INTO v_result *, ARRAY[]::json_schema_validation_result[] = a AS valid FROM get_json_schema_validations('{"type": "number"}', $$"1"$$, true) a;
+        ASSERT v_result.valid, v_result;
+    -- test quoted number is valid when string_as_number is true with a literal decimal string
+    SELECT INTO v_result *, ARRAY[]::json_schema_validation_result[] = a AS valid FROM get_json_schema_validations('{"type": "number"}', $$"1.1"$$, true) a;
+        ASSERT v_result.valid, v_result;
+    -- test quoted number is valid when string_as_number is true with an object
+    SELECT INTO v_result *, ARRAY[]::json_schema_validation_result[] = a AS valid FROM get_json_schema_validations('{"properties":  {"foo": {"type": "number"}}}', $${ "foo": "1" }$$, true) a;
+        ASSERT v_result.valid, v_result;
+    -- test quoted number is valid when string_as_number is true with an array
+    SELECT INTO v_result *, ARRAY[]::json_schema_validation_result[] = a AS valid FROM get_json_schema_validations(v_schema2, $$ { "foo": ["0"] } $$, true) a;
+        ASSERT v_result.valid, v_result;
+
+    -- test quoted number when string_as_number is true with a invalid numerical string
+    SELECT INTO v_result *, ARRAY[('{}', 'string is not a valid type: {number}')]::json_schema_validation_result[] = a AS valid FROM get_json_schema_validations('{"type": "number"}', $$".1"$$, true) a;
+        ASSERT v_result.valid, v_result;
+
+    -- test quoted number when string_as_number is true with a invalid numerical string
+    SELECT INTO v_result *, ARRAY[('{}', 'string is not a valid type: {number}')]::json_schema_validation_result[] = a AS valid FROM get_json_schema_validations('{"type": "number"}', $$"0.1.1"$$, true) a;
+        ASSERT v_result.valid, v_result;
+
+    -- test quoted integer is not valid even when string_as_number is true
+    SELECT INTO v_result *, ARRAY[('{1}','string is not a valid type: {integer}')]::json_schema_validation_result[] = a AS valid FROM get_json_schema_validations('{"items": [{"type": "integer"}, {"$ref": "#/items/0"}]}', '[1, "1"]', true) a;
+        ASSERT v_result.valid, v_result;
+
+    v_result := test_raises_exception(format($$ SELECT json_schema_check_constraint (%L, '{ "foo": ["string", 1, "Too many items here"] }') $$, v_schema1), '{"message_text":  "json_schema_validation_failed", "PG_EXCEPTION_DETAIL": [{"path": ["foo"], "error": "items count of 3 exceeds maxItems of 2"}]}');
+    ASSERT v_result.result = true, v_result;
+    -- does not raise any exception for valid string
+    ASSERT true = json_schema_check_constraint('{"type": "number"}', '"1.9"', true);
+
+    -- create the table
+    EXECUTE format($$ CREATE TEMPORARY TABLE test_entry (data jsonb CHECK ( validate_json_schema(%L, data) )) ON COMMIT DROP$$, v_schema1);
+    -- valid data
+    INSERT INTO test_entry VALUES ('{ "foo": ["string", 1] }');
+    -- invalid data
+    v_result := test_raises_exception($$ INSERT INTO test_entry VALUES ('{ "foo": ["string", 1, "Too many items here"] }') $$, '{"message_text":  "new row for relation \"test_entry\" violates check constraint \"test_entry_data_check\""}');
+    ASSERT v_result.result = true, v_result;
+
+    -- Create the table
+    EXECUTE format($$ CREATE TEMPORARY TABLE test_entry_with_detailed_message (data jsonb CHECK ( json_schema_check_constraint(%L, data) )) ON COMMIT DROP$$, v_schema1);
+    -- test valid data
+    INSERT INTO test_entry_with_detailed_message VALUES ('{ "foo": ["string", 1] }');
+    -- test invalid data
+
+    v_result := test_raises_exception($$ INSERT INTO test_entry_with_detailed_message VALUES ('{ "foo": ["string", 1, "Too many items here"] }') $$, '{"message_text": "json_schema_validation_failed", "PG_EXCEPTION_DETAIL": [{"path": ["foo"], "error": "items count of 3 exceeds maxItems of 2"}] }' );
+    ASSERT v_result.result = true, v_result;
+
+END
+$f$;
