@@ -8,13 +8,14 @@ CREATE OR REPLACE FUNCTION json_schema_validation_result_as_bool (@extschema@.js
     SELECT ($1).error IS NULL;
 $$ LANGUAGE SQL IMMUTABLE;
 
+CREATE CAST ( json_schema_validation_result AS bool )
+    WITH FUNCTION @extschema@.json_schema_validation_result_as_bool(json_schema_validation_result)
+    AS ASSIGNMENT;
+
 CREATE OR REPLACE FUNCTION json_schema_validation_result_array_as_bool (@extschema@.json_schema_validation_result[]) RETURNS bool AS $$
     SELECT $1 IS NULL OR true = ALL ($1::bool[]);
 $$ LANGUAGE SQL IMMUTABLE;
 
-CREATE CAST ( json_schema_validation_result AS bool )
-    WITH FUNCTION @extschema@.json_schema_validation_result_as_bool(json_schema_validation_result)
-    AS ASSIGNMENT;
 
 CREATE CAST ( json_schema_validation_result[] AS bool )
     WITH FUNCTION @extschema@.json_schema_validation_result_array_as_bool(json_schema_validation_result[])
@@ -711,6 +712,14 @@ CREATE OR REPLACE FUNCTION json_schema_resolve_ids_to_paths (
     END;
 $f$ LANGUAGE plpgsql IMMUTABLE;
 
+CREATE OR REPLACE FUNCTION json_schema_resolve_ids_to_paths(schema jsonb) RETURNS TABLE (
+        resolved_uri text,
+        resolved_path text[]
+    ) AS $$
+    SELECT * FROM @extschema@.json_schema_resolve_ids_to_paths(schema, '{}'::text[], null, null) t
+    WHERE t.resolved_uri IS NOT NULL;
+$$ LANGUAGE SQL IMMUTABLE ;
+
 CREATE OR REPLACE FUNCTION json_schema_resolve_refs(schema jsonb) RETURNS jsonb AS $$
     SELECT schema FROM @extschema@.json_schema_resolve_refs(
         schema,
@@ -719,12 +728,4 @@ CREATE OR REPLACE FUNCTION json_schema_resolve_refs(schema jsonb) RETURNS jsonb 
         (SELECT jsonb_object_agg(resolved_uri, resolved_path) FROM @extschema@.json_schema_resolve_ids_to_paths(schema)),
         true
         );
-$$ LANGUAGE SQL IMMUTABLE ;
-
-CREATE OR REPLACE FUNCTION json_schema_resolve_ids_to_paths(schema jsonb) RETURNS TABLE (
-        resolved_uri text,
-        resolved_path text[]
-    ) AS $$
-    SELECT * FROM @extschema@.json_schema_resolve_ids_to_paths(schema, '{}'::text[], null, null) t
-    WHERE t.resolved_uri IS NOT NULL;
 $$ LANGUAGE SQL IMMUTABLE ;
