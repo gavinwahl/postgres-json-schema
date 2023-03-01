@@ -79,10 +79,10 @@ $f$ LANGUAGE 'plpgsql' IMMUTABLE;
 
 -- MOCK Placeholder
 CREATE OR REPLACE FUNCTION get_json_schema_validations(schema jsonb, data jsonb, root_schema jsonb, schema_path text[], string_as_number bool)
-RETURNS json_schema_validation_result[] AS $f$ BEGIN END; $f$ LANGUAGE plpgsql;
+RETURNS @extschema@.json_schema_validation_result[] AS $f$ BEGIN END; $f$ LANGUAGE plpgsql;
 
 CREATE OR REPLACE FUNCTION get_json_schema_validations(schema jsonb, data jsonb, string_as_number bool DEFAULT false)
-RETURNS json_schema_validation_result[] AS $f$
+RETURNS @extschema@.json_schema_validation_result[] AS $f$
     SELECT @extschema@.get_json_schema_validations(schema, data, schema, ARRAY []::text[], string_as_number);
 $f$ LANGUAGE SQL IMMUTABLE ;
 
@@ -102,7 +102,7 @@ CREATE OR REPLACE FUNCTION json_schema_check_constraint(
     column_name text default ''
 ) RETURNS bool AS $$
     DECLARE
-        result json_schema_validation_result[];
+        result @extschema@.json_schema_validation_result[];
     BEGIN
         result := @extschema@.get_json_schema_validations(schema, data, schema, '{}'::text[], string_as_number := string_as_number);
         IF (NOT result) THEN
