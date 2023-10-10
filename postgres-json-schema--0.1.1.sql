@@ -240,7 +240,6 @@ BEGIN
   IF schema ? 'patternProperties' AND jsonb_typeof(data) = 'object' THEN
     FOR prop IN SELECT jsonb_object_keys(data) LOOP
       FOR pattern IN SELECT jsonb_object_keys(schema->'patternProperties') LOOP
-        RAISE NOTICE 'prop %s, pattern %, schema %', prop, pattern, schema->'patternProperties'->pattern;
         IF prop ~ pattern AND NOT @extschema@.validate_json_schema(schema->'patternProperties'->pattern, data->prop, root_schema) THEN
           RETURN false;
         END IF;
