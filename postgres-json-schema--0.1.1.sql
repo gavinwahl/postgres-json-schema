@@ -237,33 +237,24 @@ BEGIN
     END IF;
   END IF;
 
-  IF schema ? 'format' AND jsonb_typeof(data) = 'string' 
-                       AND schema->>'format' in ('date-time', 'date', 'time', 'duration', 'ipv4', 'ipv6', 'uuid') THEN
-    declare
-      str_format text := schema->>'format';
-      str_value text := data #>> '{}'; 
-      dynsql text;
-    begin
-	  dynsql := format(
-	  		'select %L::%s', 
-	  		str_value, 
-	  		case str_format
-	          when 'date-time' then 'timestamptz' 
-	          when 'duration' then 'interval'
-	          when 'ipv4' then 'inet'
-	          when 'ipv6' then 'inet'
-	          else str_format
-	        end
-	       );
-	  -- raise notice '%', dynsql;
-	  execute dynsql;
-	  if str_format in ('ipv4', 'ipv6') and (str_format = 'ipv6' and str_value !~ ':' or 
-	                                         str_format = 'ipv4' and str_value  ~ ':') then
-	     RETURN false;
-	  end if;  
-    exception when others then 
+  IF schema ? 'format' AND jsonb_typeof(data) = 'string' THEN
+    DECLARE
+      target text := (data #>> '{}');
+    BEGIN
+      CASE (schema->>'format')
+        WHEN 'date-time' THEN PERFORM target::timestamptz; 
+        WHEN 'date'      THEN PERFORM target::date;
+        WHEN 'time'      THEN PERFORM target::time;
+        WHEN 'duration'  THEN PERFORM target::interval; 
+        WHEN 'uuid'      THEN PERFORM target::uuid;
+        WHEN 'ipv6'      THEN PERFORM target::inet; IF target NOT LIKE '%:%' THEN RAISE; END IF;
+        WHEN 'ipv4'      THEN PERFORM target::inet; IF target LIKE '%:%' THEN RAISE; END IF;
+        WHEN 'regex'     THEN PERFORM '' ~ target; 
+        ELSE null;
+      END CASE;
+    EXCEPTION WHEN OTHERS THEN
       RETURN false;
-    end; 
+    END;
   END IF;
 
   IF schema ? 'patternProperties' AND jsonb_typeof(data) = 'object' THEN
