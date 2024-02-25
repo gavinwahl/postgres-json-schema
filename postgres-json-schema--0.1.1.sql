@@ -250,7 +250,7 @@ BEGIN
         WHEN 'ipv6'      THEN PERFORM target::inet; IF target NOT LIKE '%:%' THEN RAISE; END IF;
         WHEN 'ipv4'      THEN PERFORM target::inet; IF target LIKE '%:%' THEN RAISE; END IF;
         WHEN 'regex'     THEN PERFORM '' ~ target; 
-        ELSE null;
+        ELSE null; -- consistent with current behaviour - validate positive for unsupported options
       END CASE;
     EXCEPTION WHEN OTHERS THEN
       RETURN false;
