@@ -240,6 +240,7 @@ BEGIN
   IF schema ? 'format' AND jsonb_typeof(data) = 'string' THEN
     DECLARE
       target text := (data #>> '{}');
+      EMAIL_RX constant text := '^[\w.!#$%&''*+/=?^`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)*$';
     BEGIN
       CASE (schema->>'format')
         WHEN 'date-time' THEN PERFORM target::timestamptz; 
@@ -250,6 +251,7 @@ BEGIN
         WHEN 'ipv6'      THEN PERFORM target::inet; IF target NOT LIKE '%:%' THEN RAISE; END IF;
         WHEN 'ipv4'      THEN PERFORM target::inet; IF target LIKE '%:%' THEN RAISE; END IF;
         WHEN 'regex'     THEN PERFORM '' ~ target; 
+        WHEN 'email'     THEN IF target !~* EMAIL_RX THEN RAISE; END IF;
         ELSE null; -- consistent with current behaviour - validate positive for unsupported options
       END CASE;
     EXCEPTION WHEN OTHERS THEN
