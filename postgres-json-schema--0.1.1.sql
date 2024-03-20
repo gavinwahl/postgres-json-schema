@@ -237,6 +237,28 @@ BEGIN
     END IF;
   END IF;
 
+  IF schema ? 'format' AND jsonb_typeof(data) = 'string' THEN
+    DECLARE
+      target text := (data #>> '{}');
+      EMAIL_RX constant text := '^[a-zA-Z0-9.!#$%&''*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$';
+    BEGIN
+      CASE (schema->>'format')
+        WHEN 'date-time' THEN PERFORM target::timestamptz; 
+        WHEN 'date'      THEN PERFORM target::date;
+        WHEN 'time'      THEN PERFORM target::time;
+        WHEN 'duration'  THEN PERFORM target::interval; 
+        WHEN 'uuid'      THEN PERFORM target::uuid;
+        WHEN 'ipv6'      THEN PERFORM target::inet; IF target NOT LIKE '%:%' THEN RAISE; END IF;
+        WHEN 'ipv4'      THEN PERFORM target::inet; IF target LIKE '%:%' THEN RAISE; END IF;
+        WHEN 'regex'     THEN PERFORM '' ~ target; 
+        WHEN 'email'     THEN IF target !~ EMAIL_RX THEN RAISE; END IF;
+        ELSE null; -- consistent with current behaviour - validate positive for unsupported options
+      END CASE;
+    EXCEPTION WHEN OTHERS THEN
+      RETURN false;
+    END;
+  END IF;
+
   IF schema ? 'patternProperties' AND jsonb_typeof(data) = 'object' THEN
     FOR prop IN SELECT jsonb_object_keys(data) LOOP
       FOR pattern IN SELECT jsonb_object_keys(schema->'patternProperties') LOOP
